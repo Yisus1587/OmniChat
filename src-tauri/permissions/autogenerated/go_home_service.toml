@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-go-home-service"
+description = "Enables the go_home_service command without any pre-configured scope."
+commands.allow = ["go_home_service"]
+
+[[permission]]
+identifier = "deny-go-home-service"
+description = "Denies the go_home_service command without any pre-configured scope."
+commands.deny = ["go_home_service"]

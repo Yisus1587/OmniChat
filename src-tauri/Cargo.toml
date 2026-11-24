@@ -1,0 +1,65 @@
+[package]
+name = "omnichat"
+version = "0.1.0"
+description = "OmniChat: todos tus servicios de mensajería en una sola app"
+authors = ["OmniChat"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+# El sufijo `_lib` evita el conflicto de nombres entre el binario y la librería en Windows.
+name = "omnichat_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri 2.x. `unstable` habilita multi-webview (`Window::add_child`): cada servicio es un
+# webview hijo dentro de la ventana principal.
+# `tray-icon`: icono junto al reloj con punto de no leídos.
+tauri = { version = "2", features = ["unstable", "tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# Lista de servicios añadidos (SQLite bundled).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+# Hora local para el horario de "No molestar".
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Huella del PIN de bloqueo (nunca se guarda el PIN).
+sha2 = "0.10"
+# Descarga del icono de las webs personalizadas (TLS del sistema: sin compilar C).
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+base64 = "0.22"
+# Memoria que usa cada servicio (procesos de WebView2).
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+
+# Avisos nativos de Windows con identidad propia por servicio (nombre e icono).
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+winreg = "0.56"
+# Borrar del centro de notificaciones de Windows los avisos al bloquear con PIN.
+windows = { version = "0.62", features = ["UI_Notifications"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

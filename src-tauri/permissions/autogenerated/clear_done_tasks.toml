@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-done-tasks"
+description = "Enables the clear_done_tasks command without any pre-configured scope."
+commands.allow = ["clear_done_tasks"]
+
+[[permission]]
+identifier = "deny-clear-done-tasks"
+description = "Denies the clear_done_tasks command without any pre-configured scope."
+commands.deny = ["clear_done_tasks"]

@@ -1,0 +1,121 @@
+@import "@fontsource-variable/instrument-sans";
+@import "tailwindcss";
+
+/*
+ * OmniChat · "centralita"
+ * Interfaz en tinta fría y niebla; el único color saturado es el de cada servicio,
+ * que aparece como una línea (como los cables de una centralita) en la cabecera.
+ * La barra lateral es siempre oscura (`rail`); el resto sigue el tema claro/oscuro.
+ */
+@theme {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #17202c;
+  --color-ink-2: #243041;
+  --color-ink-3: #3a4759;
+  --color-fog: #e8ecf0;
+  --color-fog-2: #dde3e9;
+  --color-paper: #f9fafb;
+  --color-surface: #ffffff;
+  --color-line: #cfd7e0;
+  --color-muted: #5f6b7a;
+  --color-faint: #8a95a3;
+
+  /* Barra lateral (oscura en ambos temas). */
+  --color-rail: #17202c;
+  --color-rail-2: #243041;
+  --color-rail-3: #3a4759;
+  --color-rail-text: #f9fafb;
+
+  /* Un color por servicio. */
+  --color-s-whatsapp: #17a34a;
+  --color-s-telegram: #1f97d4;
+  --color-s-messenger: #8b3cf0;
+  --color-s-instagram: #d62976;
+  --color-s-gmail: #d2452f;
+  --color-s-outlook: #0f6cbd;
+  --color-s-office365: #c2511c;
+  --color-s-custom: #5f6b7a;
+
+  --color-ok: #17a34a;
+  --color-warn: #c9821b;
+  --color-bad: #c43c3c;
+}
+
+/* Tema oscuro: se activa con <html data-theme="dark"> (lo decide App según los ajustes). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-ink: #e6eaf0;
+  --color-ink-2: #cdd4de;
+  --color-ink-3: #aab5c3;
+  --color-fog: #131921;
+  --color-fog-2: #1d2530;
+  --color-paper: #0f141b;
+  --color-surface: #19202a;
+  --color-line: #2a3442;
+  --color-muted: #8f9aa9;
+  --color-faint: #687384;
+  --color-rail: #0a0e13;
+  --color-rail-2: #161c25;
+  --color-rail-3: #263040;
+  --color-bad: #e05555;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-fog font-sans text-ink antialiased;
+    font-size: 14px;
+    line-height: 1.45;
+    font-feature-settings: "ss01", "tnum";
+    overflow: hidden;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  .on-dark :focus-visible,
+  .on-dark:focus-visible {
+    outline-color: var(--color-rail-text);
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-s-outlook) 30%, transparent);
+  }
+}
+
+@utility scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+
+@utility field {
+  @apply w-full rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint;
+  @apply focus:border-ink focus:outline-none;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-[13px] font-medium transition-colors;
+  @apply disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-ink text-paper hover:bg-ink-2;
+}
+
+@utility btn-ghost {
+  @apply btn text-ink hover:bg-fog-2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
