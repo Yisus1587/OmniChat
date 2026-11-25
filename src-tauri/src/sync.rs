@@ -328,7 +328,11 @@ async fn apply_remote(app: &AppHandle, file: &SyncFile, meta: &mut Meta) -> AppR
         let after = db::update(&pool, &before.id, &patch).await?;
         db::set_position(&pool, &after.id, f.position).await?;
         if after.url != before.url || after.user_agent != before.user_agent {
-            host.recreate(app, &after).await?;
+            // Los datos ya están guardados: un webview que no arranca no debe parar la
+            // sincronización (se vuelve a crear al recolocar los servicios).
+            if let Err(e) = host.recreate(app, &after).await {
+                tracing::warn!(service = %after.id, error = %e, "sync: could not recreate webview");
+            }
         } else {
             host.update_meta(app, &after);
         }
@@ -353,32 +357,68 @@ pub async fn tick(app: &AppHandle) {
     }
 }
 
+/// Fecha del fichero, o `None` si no existe.
+fn modified(path: &Path) -> AppResult<Option<SystemTime>> {
+    match std::fs::metadata(path) {
+        Ok(md) => Ok(Some(md.modified()?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Lee el fichero compartido (`None` si no existe). Si está a medio descargar, dañado o es de
+/// una versión más nueva devuelve un error, para no sobrescribir lo que no se entiende.
+fn read_file(path: &Path) -> AppResult<Option<SyncFile>> {
+    #[derive(Deserialize)]
+    struct Header {
+        format: String,
+        version: u32,
+    }
+    let bad = |m: &str| AppError::InvalidInput(m.into());
+
+    match std::fs::metadata(path) {
+        Ok(md) if md.len() > MAX_FILE => return Err(bad("el fichero compartido es demasiado grande")),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    let bytes = std::fs::read(path)?;
+    let unreadable = || bad("el fichero compartido está incompleto o dañado");
+    let header: Header = serde_json::from_slice(&bytes).map_err(|_| unreadable())?;
+    if header.format != FORMAT {
+        return Err(unreadable());
+    }
+    if header.version > VERSION {
+        return Err(bad("el fichero compartido es de una versión más nueva de OmniChat; actualiza la app"));
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| unreadable())
+}
+
 async fn run(app: &AppHandle, dir: &Path) -> AppResult<()> {
     let pool = app.state::<SqlitePool>();
     let mut meta = load_meta(&pool).await;
     let path = dir.join(FILE);
 
-    // 1. Leer.
-    if let Ok(md) = std::fs::metadata(&path) {
-        let mtime = md.modified().ok();
-        let changed = *LAST_MTIME.lock().unwrap() != mtime;
-        if changed && md.len() <= MAX_FILE {
-            *LAST_MTIME.lock().unwrap() = mtime;
-            let file = std::fs::read(&path)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<SyncFile>(&b).ok())
-                .filter(|f| f.format == FORMAT && f.version <= VERSION);
-            if let Some(file) = file {
-                let h = hash(&file);
-                if meta.last_hash.as_deref() != Some(h.as_str()) && file.device != meta.device {
-                    apply_remote(app, &file, &mut meta).await?;
+    // 1. Leer. Si algo falla se sale sin escribir y se reintenta en la próxima pasada: el
+    // fichero sólo se da por leído (`LAST_MTIME`) cuando sus cambios están aplicados.
+    let seen = modified(&path)?;
+    let changed = *LAST_MTIME.lock().unwrap() != seen;
+    if changed {
+        if let Some(file) = read_file(&path)? {
+            let h = hash(&file);
+            if meta.last_hash.as_deref() != Some(h.as_str()) && file.device != meta.device {
+                let applied = apply_remote(app, &file, &mut meta).await;
+                if applied.is_ok() {
                     meta.last_hash = Some(h);
-                    save_meta(&pool, &meta).await?;
-                    let _ = app.emit("config:changed", ());
-                    tracing::info!("sync: applied changes from another device");
                 }
+                // Aunque falle a mitad, se conservan los enlaces y borrados ya aplicados.
+                save_meta(&pool, &meta).await?;
+                let _ = app.emit("config:changed", ());
+                applied?;
+                tracing::info!("sync: applied changes from another device");
             }
         }
+        *LAST_MTIME.lock().unwrap() = seen;
     }
 
     // 2. Escribir si lo local cambió.
@@ -388,6 +428,11 @@ async fn run(app: &AppHandle, dir: &Path) -> AppResult<()> {
         let json = serde_json::to_vec_pretty(&snap).map_err(|e| AppError::InvalidInput(e.to_string()))?;
         let tmp = dir.join(format!("{FILE}.{}.tmp", &meta.device[..8]));
         std::fs::write(&tmp, json)?;
+        if modified(&path)? != seen {
+            // Otro equipo acaba de escribir: primero hay que leer sus cambios.
+            let _ = std::fs::remove_file(&tmp);
+            return Ok(());
+        }
         std::fs::rename(&tmp, &path)?;
         *LAST_MTIME.lock().unwrap() = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         meta.last_hash = Some(h);
@@ -401,6 +446,8 @@ pub async fn record_removed(app: &AppHandle, local_id: &str) {
     if app.state::<ServiceHost>().settings().sync.folder.is_none() {
         return;
     }
+    // Una sincronización en curso guardaría su copia del estado y perdería este borrado.
+    let _guard = RUNNING.lock().await;
     let pool = app.state::<SqlitePool>();
     let mut meta = load_meta(&pool).await;
     let id = meta.sync_id(local_id);
@@ -439,5 +486,43 @@ mod tests {
         assert_eq!(hash(&a), hash(&b));
         b.settings.hide_content = true;
         assert_ne!(hash(&a), hash(&b));
+    }
+
+    #[test]
+    fn reads_only_what_it_understands() {
+        let dir = std::env::temp_dir().join(format!("omnichat-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join(FILE);
+        assert!(modified(&path).unwrap().is_none());
+        assert!(read_file(&path).unwrap().is_none());
+
+        let file = SyncFile {
+            format: FORMAT.into(),
+            version: VERSION,
+            device: "a".into(),
+            updated_at: 1,
+            workspaces: vec![],
+            services: vec![],
+            removed: vec![],
+            settings: Settings::default(),
+        };
+        let good = serde_json::to_vec(&file).unwrap();
+        std::fs::write(&path, &good).unwrap();
+        assert!(modified(&path).unwrap().is_some());
+        assert_eq!(hash(&read_file(&path).unwrap().unwrap()), hash(&file));
+
+        // A medio descargar, vacío, ajeno o de una versión futura (con otra estructura).
+        let cases: [&[u8]; 4] = [
+            &good[..good.len() / 2],
+            b"",
+            br#"{"format":"otra-cosa","version":1}"#,
+            br#"{"format":"omnichat-sync","version":2,"nuevo":true}"#,
+        ];
+        for bytes in cases {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(read_file(&path).is_err());
+        }
+        assert!(read_file(&path).unwrap_err().to_string().contains("más nueva"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -6,28 +6,43 @@
 //! carpeta de datos, cada uno puede tener un proxy o extensiones distintos.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use tauri::{AppHandle, Manager, Url};
 
 use crate::db::{Service, ServicePatch};
 use crate::error::{AppError, AppResult};
 
-pub const MOBILE_UA: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 \
-    (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
-pub const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-    (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+/// Versión de Chrome que se declara si no se puede consultar la de WebView2.
+const FALLBACK_CHROME: u32 = 140;
 
 const MAX_UA: usize = 400;
 const MAX_CODE: usize = 100 * 1024;
 
 /// Agente de usuario efectivo del servicio (`None` = el de WebView2).
-pub fn user_agent(s: &Service) -> Option<&str> {
+pub fn user_agent(s: &Service) -> Option<String> {
     match s.user_agent.as_deref() {
         None | Some("") => None,
-        Some("mobile") => Some(MOBILE_UA),
-        Some("chrome") => Some(CHROME_UA),
-        Some(custom) => Some(custom),
+        Some("mobile") => Some(chrome_ua("Linux; Android 14; Pixel 8", " Mobile", chrome_version())),
+        Some("chrome") => Some(chrome_ua("Windows NT 10.0; Win64; x64", "", chrome_version())),
+        Some(custom) => Some(custom.to_string()),
     }
+}
+
+fn chrome_ua(platform: &str, mobile: &str, version: u32) -> String {
+    format!("Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version}.0.0.0{mobile} Safari/537.36")
+}
+
+/// Versión de Chrome equivalente al WebView2 instalado (comparten número), que Windows mantiene
+/// al día: así el agente no envejece con OmniChat.
+fn chrome_version() -> u32 {
+    static VERSION: OnceLock<u32> = OnceLock::new();
+    *VERSION.get_or_init(|| tauri::webview_version().ok().and_then(|v| major_version(&v)).unwrap_or(FALLBACK_CHROME))
+}
+
+/// "142.0.3595.53" → 142
+fn major_version(version: &str) -> Option<u32> {
+    version.split('.').next()?.trim().parse().ok().filter(|v| *v > 0)
 }
 
 /// Proxy válido: `http://` o `socks5://`, con host y puerto, sin usuario ni ruta
@@ -141,6 +156,18 @@ pub fn list_extensions(app: &AppHandle) -> AppResult<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_agent_follows_webview2() {
+        assert_eq!(major_version("142.0.3595.53"), Some(142));
+        assert_eq!(major_version("desconocida"), None);
+        assert_eq!(
+            chrome_ua("Windows NT 10.0; Win64; x64", "", 142),
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+        );
+        assert!(chrome_ua("Linux; Android 14; Pixel 8", " Mobile", 142).contains("Chrome/142.0.0.0 Mobile Safari"));
+        assert!(chrome_version() > 131);
+    }
 
     #[test]
     fn proxies() {

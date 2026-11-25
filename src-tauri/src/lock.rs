@@ -216,6 +216,35 @@ pub fn on_focus(app: &AppHandle, focused: bool) {
     });
 }
 
+/// Tiempo sin teclado ni ratón en todo el equipo (`None` si no se puede saber).
+#[cfg(windows)]
+fn system_idle() -> Option<Duration> {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    // SAFETY: `info` es válido durante la llamada y declara su tamaño.
+    let now = unsafe {
+        if !GetLastInputInfo(&mut info).as_bool() {
+            return None;
+        }
+        GetTickCount()
+    };
+    // El contador de 32 bits da la vuelta cada 49 días; de ahí la resta modular.
+    Some(Duration::from_millis(u64::from(now.wrapping_sub(info.dwTime))))
+}
+
+#[cfg(not(windows))]
+fn system_idle() -> Option<Duration> {
+    None
+}
+
+/// Tiempo sin usar OmniChat: desde que perdió el foco o, si lo conserva (el usuario se levantó
+/// dejándolo en pantalla), desde la última pulsación en el equipo.
+fn unused_for(unfocused: Option<Duration>, system: Option<Duration>) -> Duration {
+    unfocused.or(system).unwrap_or_default()
+}
+
 /// Llamado periódicamente: bloquea tras N minutos sin usar OmniChat.
 pub fn check_idle(app: &AppHandle) {
     let host = app.state::<ServiceHost>();
@@ -223,10 +252,8 @@ pub fn check_idle(app: &AppHandle) {
     if minutes == 0 {
         return;
     }
-    let idle = host.with_lock(|l| {
-        l.unfocused_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(u64::from(minutes) * 60))
-    });
-    if idle {
+    let unfocused = host.with_lock(|l| l.unfocused_since.map(|t| t.elapsed()));
+    if unused_for(unfocused, system_idle()) >= Duration::from_secs(u64::from(minutes) * 60) {
         lock(app);
     }
 }
@@ -234,6 +261,18 @@ pub fn check_idle(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_with_and_without_focus() {
+        let (min, hour) = (Duration::from_secs(60), Duration::from_secs(3600));
+        // En primer plano cuenta la inactividad del equipo.
+        assert_eq!(unused_for(None, Some(hour)), hour);
+        // En segundo plano, el tiempo sin foco aunque se esté usando otra app.
+        assert_eq!(unused_for(Some(hour), Some(min)), hour);
+        assert_eq!(unused_for(None, None), Duration::ZERO);
+        #[cfg(windows)]
+        assert!(system_idle().is_some());
+    }
 
     #[test]
     fn pin_hash_and_validation() {

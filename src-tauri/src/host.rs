@@ -252,7 +252,7 @@ impl ServiceHost {
 
         // Ajustes avanzados (ver `advanced.rs`).
         if let Some(ua) = advanced::user_agent(service) {
-            builder = builder.user_agent(ua);
+            builder = builder.user_agent(&ua);
         }
         if let Some(proxy) = service.proxy.as_deref().and_then(|p| advanced::parse_proxy(p).ok()) {
             builder = builder.proxy_url(proxy);
@@ -547,11 +547,12 @@ impl ServiceHost {
             return; // título temporal: no es el contador
         }
 
-        let count = unread_from_title(title);
-        let (previous, meta, is_active, has_web_notifies) = {
+        let (count, previous, meta, is_active, has_web_notifies) = {
             let mut st = self.state.lock().unwrap();
+            let meta = st.meta.get(id).cloned();
+            let count = unread_from_title(meta.as_ref().map_or(ServiceKind::Custom, |m| m.kind), title);
             let previous = st.unread.insert(id.to_string(), count).unwrap_or(0);
-            (previous, st.meta.get(id).cloned(), st.active.as_deref() == Some(id), st.web_notifies.contains(id))
+            (count, previous, meta, st.active.as_deref() == Some(id), st.web_notifies.contains(id))
         };
         if previous == count {
             return;

@@ -1,6 +1,6 @@
 [package]
 name = "omnichat"
-version = "0.1.0"
+version = "0.1.1"
 description = "OmniChat: todos tus servicios de mensajería en una sola app"
 authors = ["OmniChat"]
 license = "MIT"
@@ -52,7 +52,8 @@ sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 tauri-winrt-notification = "0.8"
 winreg = "0.56"
 # Borrar del centro de notificaciones de Windows los avisos al bloquear con PIN.
-windows = { version = "0.62", features = ["UI_Notifications"] }
+# Win32_*: tiempo de inactividad del equipo (bloqueo automático).
+windows = { version = "0.62", features = ["UI_Notifications", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [profile.dev.package."*"]
 opt-level = 2

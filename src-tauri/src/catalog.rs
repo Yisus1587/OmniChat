@@ -68,30 +68,41 @@ pub fn normalize_custom_url(input: &str) -> Option<String> {
 /// Extrae el número de no leídos del título de la página.
 ///
 /// Las webs lo publican así: `(3) WhatsApp`, `Recibidos (12) - ana@gmail.com - Gmail`,
-/// `(99+) Messenger`… Tomamos el primer `(N)` o `(N+)`.
-pub fn unread_from_title(title: &str) -> u32 {
-    let bytes = title.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'(' {
-            let start = i + 1;
-            let mut j = start;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j > start {
-                let mut end = j;
-                if end < bytes.len() && bytes[end] == b'+' {
-                    end += 1;
-                }
-                if end < bytes.len() && bytes[end] == b')' {
-                    return title[start..j].parse().unwrap_or(0);
+/// `(99+) Messenger`, `Inbox (2,345)`… Tomamos el primer `(N)` o `(N+)` que parezca un contador.
+///
+/// Al principio del título siempre lo es. Más adelante puede ser parte del texto (el asunto de
+/// un correo, el nombre de un documento): se descartan los años y, en las webs personalizadas,
+/// también las cifras de cuatro o más dígitos sin separador de miles.
+pub fn unread_from_title(kind: ServiceKind, title: &str) -> u32 {
+    let mut leading = true;
+    for (i, c) in title.char_indices() {
+        if c == '(' {
+            if let Some((count, grouped)) = title[i + 1..].split_once(')').and_then(|(n, _)| parse_count(n)) {
+                let is_year = (1900..=2099).contains(&count);
+                let too_big = kind == ServiceKind::Custom && count >= 1000;
+                if leading || grouped || !(is_year || too_big) {
+                    return count;
                 }
             }
         }
-        i += 1;
+        // Viñetas, emojis o espacios delante del contador no cuentan como texto.
+        leading &= !c.is_alphanumeric() && c != '(';
     }
     0
+}
+
+/// `12`, `99+`, `2,345` o `2.345`. El segundo valor dice si lleva separador de miles.
+fn parse_count(text: &str) -> Option<(u32, bool)> {
+    let text = text.strip_suffix('+').unwrap_or(text);
+    let groups: Vec<&str> = text.split([',', '.', '\u{a0}', '\u{202f}']).collect();
+    if groups.iter().any(|g| g.is_empty() || !g.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let grouped = groups.len() > 1;
+    if grouped && (groups[0].len() > 3 || groups[1..].iter().any(|g| g.len() != 3)) {
+        return None;
+    }
+    groups.concat().parse().ok().map(|n| (n, grouped))
 }
 
 #[cfg(test)]
@@ -100,12 +111,32 @@ mod tests {
 
     #[test]
     fn parses_unread_counts() {
-        assert_eq!(unread_from_title("(3) WhatsApp"), 3);
-        assert_eq!(unread_from_title("Recibidos (12) - ana@gmail.com - Gmail"), 12);
-        assert_eq!(unread_from_title("(99+) Messenger"), 99);
-        assert_eq!(unread_from_title("WhatsApp"), 0);
-        assert_eq!(unread_from_title("Correo (sin leer) - Outlook"), 0);
-        assert_eq!(unread_from_title("Ñandú (5)"), 5);
+        use ServiceKind::*;
+        assert_eq!(unread_from_title(Whatsapp, "(3) WhatsApp"), 3);
+        assert_eq!(unread_from_title(Gmail, "Recibidos (12) - ana@gmail.com - Gmail"), 12);
+        assert_eq!(unread_from_title(Messenger, "(99+) Messenger"), 99);
+        assert_eq!(unread_from_title(Whatsapp, "WhatsApp"), 0);
+        assert_eq!(unread_from_title(Outlook, "Correo (sin leer) - Outlook"), 0);
+        assert_eq!(unread_from_title(Custom, "Ñandú (5)"), 5);
+        assert_eq!(unread_from_title(Custom, "• (4) Discord"), 4);
+        assert_eq!(unread_from_title(Gmail, "Recibidos (2.345) - ana@gmail.com - Gmail"), 2345);
+        assert_eq!(unread_from_title(Gmail, "Inbox (12,345) - ana@gmail.com - Gmail"), 12345);
+        assert_eq!(unread_from_title(Gmail, "Inbox (4567) - ana@gmail.com - Gmail"), 4567);
+        assert_eq!(unread_from_title(Custom, "(1200) Foro"), 1200);
+    }
+
+    #[test]
+    fn ignores_numbers_that_are_not_counts() {
+        use ServiceKind::*;
+        assert_eq!(unread_from_title(Custom, "Informe (2024)"), 0);
+        assert_eq!(unread_from_title(Gmail, "Factura (2024) - ana@gmail.com - Gmail"), 0);
+        assert_eq!(unread_from_title(Custom, "Pedido (123456) - Tienda"), 0);
+        assert_eq!(unread_from_title(Custom, "Informe (2024) (3)"), 3);
+        assert_eq!(unread_from_title(Custom, "Versión (1.2)"), 0);
+        assert_eq!(unread_from_title(Custom, "(99999999999)"), 0);
+        for t in ["(", "()", "(+)", "(,)", "((((", "(1.234", "texto ("] {
+            assert_eq!(unread_from_title(Custom, t), 0, "{t}");
+        }
     }
 
     #[test]
